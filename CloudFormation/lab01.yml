@@ -1,0 +1,236 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template to create a VPC, Subnets, Internet Gateway, NAT Gateway, EC2 instances
+
+Parameters:
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for the VPC
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.0.1.0/24
+    Description: CIDR block for the Public Subnet 1
+  PrivateSubnet1Cidr:
+    Type: String
+    Default: 10.0.2.0/24
+    Description: CIDR block for the Private Subnet 1
+  AvailabilityZone1:
+    Type: String
+    Default: us-east-1a
+    Description: Availability Zone for Public and Private Subnet
+  AmiId:
+    Type: String
+    Description: AMI ID for the EC2 instance
+    Default: ami-0fff1b9a61dec8a5f
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    Description: EC2 instance type
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access
+  MyIpAddress:
+    Type: String
+    Description: Your public IP address with CIDR
+    Default: 113.161.91.9/32
+
+Resources:
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: MyVPC
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnet
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet1Cidr
+      AvailabilityZone: !Ref AvailabilityZone1
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnet1
+
+  # Private Subnet
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet1Cidr
+      AvailabilityZone: !Ref AvailabilityZone1
+      Tags:
+        - Key: Name
+          Value: PrivateSubnet1
+
+  # Default Security Group
+  DefaultSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Default Security Group for the VPC
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: MyDefaultSG
+
+  # Public Route Table and Route
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  # NAT Gateway
+  NatEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  # Private Route Table and Route (for NAT Gateway)
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: PrivateRouteTable
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  # Security Group for Public EC2
+  PublicSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Public EC2 Instance
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref MyIpAddress
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+
+  # Security Group for Private EC2
+  PrivateSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Private EC2 Instance
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref PublicSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+
+  # Public EC2 Instance
+  PublicEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref PublicSecurityGroup
+      SubnetId: !Ref PublicSubnet1
+      ImageId: !Ref AmiId
+      Tags:
+        - Key: Name
+          Value: PublicEC2Instance
+
+  # Private EC2 Instance
+  PrivateEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref PrivateSecurityGroup
+      SubnetId: !Ref PrivateSubnet1
+      ImageId: !Ref AmiId
+      Tags:
+        - Key: Name
+          Value: PrivateEC2Instance
+
+Outputs:
+  VPCId:
+    Description: VPC Id
+    Value: !Ref VPC
+  PublicInstanceId:
+    Description: Public EC2 Instance Id
+    Value: !Ref PublicEC2Instance
+  PrivateInstanceId:
+    Description: Private EC2 Instance Id
+    Value: !Ref PrivateEC2Instance
+  PublicInstancePublicIp:
+    Description: Public EC2 Public IP
+    Value: !GetAtt PublicEC2Instance.PublicIp
+  PrivateInstancePrivateIp:
+    Description: Private EC2 Private IP
+    Value: !GetAtt PrivateEC2Instance.PrivateIp
